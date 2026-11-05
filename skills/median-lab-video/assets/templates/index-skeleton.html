@@ -1,0 +1,1596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1920, height=1080" />
+<title>The True Nature of Pi — @median-lab Interleaved 2D & 3D Mathematical Edition</title>
+<style>
+  @font-face {
+    font-family: "BeVietnamPro";
+    src: url("./assets/fonts/BeVietnamPro-Bold.ttf") format("truetype");
+    font-weight: 600 700;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "BeVietnamPro";
+    src: url("./assets/fonts/BeVietnamPro-ExtraBold.ttf") format("truetype");
+    font-weight: 800;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "JetBrainsMono";
+    src: url("./assets/fonts/JetBrainsMono-Regular.ttf") format("truetype");
+    font-weight: 400 500;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "JetBrainsMono";
+    src: url("./assets/fonts/JetBrainsMono-Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-display: block;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: #080808;
+    color: #ebebeb;
+    font-family: "BeVietnamPro", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    user-select: none;
+  }
+  #stage {
+    display: block;
+    width: 1920px;
+    height: 1080px;
+  }
+  #ui {
+    position: fixed;
+    left: 24px;
+    bottom: 20px;
+    right: 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: rgba(16, 16, 16, 0.85);
+    border: 1px solid #2a2a2a;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-family: "JetBrainsMono", monospace;
+    font-size: 13px;
+    color: #949494;
+    z-index: 100;
+  }
+  body.render-mode #ui { display: none !important; }
+  #ui button {
+    background: #ebebeb;
+    color: #080808;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #ui input[type="range"] {
+    flex: 1;
+    accent-color: #6b8cae;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage" width="1920" height="1080"></canvas>
+<div id="ui">
+  <button id="play-btn">Play</button>
+  <input id="scrub" type="range" min="0" max="412.98" step="0.03" value="0" />
+  <span id="time-lbl">0.0s / 413.0s</span>
+</div>
+<audio id="audio" src="./assets/audio/mix.m4a" preload="auto"></audio>
+
+<script src="./data/timeline.js"></script>
+<script>
+(() => {
+  if (location.search.includes("render")) {
+    document.body.classList.add("render-mode");
+  }
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  const W = 1920, H = 1080;
+  const TAU = Math.PI * 2;
+
+  const COL = {
+    void: "#080808",
+    chalk: "#ebebeb",
+    sec: "#949494",
+    muted: "#525252",
+    ghost: "#242424",
+    blue: "#6b8cae",
+    gold: "#d4b46a",
+    red: "#c96b6b",
+  };
+
+  /* === Math & Easing Helpers === */
+  const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const seg = (t, a, b) => clamp((t - a) / Math.max(1e-5, b - a), 0, 1);
+  const easeOut = (x) => 1 - Math.pow(1 - clamp(x), 3);
+  const easeIn = (x) => Math.pow(clamp(x), 3);
+  const ease = (x) => {
+    const c = clamp(x);
+    return c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;
+  };
+  const fadeWindow = (t, tIn, tOut, fadeDur = 0.55) => {
+    if (t < tIn || t > tOut) return 0;
+    return easeOut(seg(t, tIn, tIn + fadeDur)) * (1 - easeIn(seg(t, tOut - fadeDur, tOut)));
+  };
+  const hash = (n) => {
+    const x = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
+    return x - Math.floor(x);
+  };
+
+  /* === Background Stardust / Film Grain === */
+  const SPECKS = Array.from({ length: 180 }, (_, i) => ({
+    x: hash(i * 3 + 1) * W,
+    y: hash(i * 3 + 2) * H,
+    r: 0.6 + hash(i * 3 + 3) * 1.1,
+    a: 0.025 + hash(i * 5 + 7) * 0.055,
+  }));
+
+  function drawBackground(t, spotX = 960, spotY = 520, spotRadius = 560, spotColor = "rgba(255,255,255,0.045)") {
+    ctx.fillStyle = COL.void;
+    ctx.fillRect(0, 0, W, H);
+
+    const bgGrad = ctx.createRadialGradient(960, 520, 40, 960, 520, 980);
+    bgGrad.addColorStop(0, "#121212");
+    bgGrad.addColorStop(0.68, "#080808");
+    bgGrad.addColorStop(1, "#040404");
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    if (spotRadius > 0) {
+      const sp = ctx.createRadialGradient(spotX, spotY, 10, spotX, spotY, spotRadius);
+      sp.addColorStop(0, spotColor);
+      sp.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = sp;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    ctx.fillStyle = "#ffffff";
+    for (const s of SPECKS) {
+      ctx.globalAlpha = s.a;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* ============================================================================
+   * 3D MATHEMATICAL SPACE ENGINE (Used when demonstrating 3D math/physics examples!)
+   * ============================================================================ */
+  function project3D(x, y, z, cx, cy, scale, rx, ry, rz = 0, fov = 720) {
+    let y1 = y * Math.cos(rx) - z * Math.sin(rx);
+    let z1 = y * Math.sin(rx) + z * Math.cos(rx);
+    let x1 = x;
+    let x2 = x1 * Math.cos(ry) + z1 * Math.sin(ry);
+    let z2 = -x1 * Math.sin(ry) + z1 * Math.cos(ry);
+    let y2 = y1;
+    let x3 = x2 * Math.cos(rz) - y2 * Math.sin(rz);
+    let y3 = x2 * Math.sin(rz) + y2 * Math.cos(rz);
+    let z3 = z2;
+
+    const persp = fov / Math.max(120, fov + z3);
+    return {
+      x: cx + x3 * scale * persp,
+      y: cy + y3 * scale * persp,
+      z: z3,
+      s: persp,
+    };
+  }
+
+  // Draw a 3D Mathematical Coordinate Space (3D X-Y-Z Axes + Perspective XZ Reference Grid)
+  function draw3DMathSpace(cx, cy, scale, rx, ry, opts = {}) {
+    const {
+      alpha = 1,
+      gridRadius = 1.6,
+      gridSteps = 6,
+      showAxes = true,
+      axisLabels = ["x", "y", "z"],
+      floorY = 0.85,
+    } = opts;
+    if (alpha <= 0.01) return;
+    ctx.save();
+
+    // 1. Subtle 3D XZ Coordinate Grid at y = floorY
+    for (let i = -gridSteps; i <= gridSteps; i++) {
+      const u = (i / gridSteps) * gridRadius;
+      const isCenter = i === 0;
+      ctx.strokeStyle = isCenter ? "rgba(235,235,235,0.24)" : "rgba(255,255,255,0.075)";
+      ctx.lineWidth = isCenter ? 1.4 : 0.9;
+      ctx.globalAlpha = alpha * (1 - Math.abs(i) / (gridSteps * 1.25));
+
+      const pA = project3D(u, floorY, -gridRadius, cx, cy, scale, rx, ry);
+      const pB = project3D(u, floorY, gridRadius, cx, cy, scale, rx, ry);
+      ctx.beginPath(); ctx.moveTo(pA.x, pA.y); ctx.lineTo(pB.x, pB.y); ctx.stroke();
+
+      const pC = project3D(-gridRadius, floorY, u, cx, cy, scale, rx, ry);
+      const pD = project3D(gridRadius, floorY, u, cx, cy, scale, rx, ry);
+      ctx.beginPath(); ctx.moveTo(pC.x, pC.y); ctx.lineTo(pD.x, pD.y); ctx.stroke();
+    }
+
+    // 2. 3D Coordinate Axes (X, Y, Z) with arrowheads
+    if (showAxes) {
+      const axes = [
+        { dx: 1.45, dy: 0, dz: 0, col: "rgba(107, 140, 174, 0.55)", lbl: axisLabels[0] },
+        { dx: 0, dy: -1.35, dz: 0, col: "rgba(235, 235, 235, 0.55)", lbl: axisLabels[1] },
+        { dx: 0, dy: 0, dz: 1.45, col: "rgba(212, 180, 106, 0.55)", lbl: axisLabels[2] },
+      ];
+      const orig = project3D(0, 0, 0, cx, cy, scale, rx, ry);
+      axes.forEach((ax) => {
+        const tip = project3D(ax.dx, ax.dy, ax.dz, cx, cy, scale, rx, ry);
+        ctx.globalAlpha = alpha * 0.85;
+        ctx.strokeStyle = ax.col;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(orig.x, orig.y);
+        ctx.lineTo(tip.x, tip.y);
+        ctx.stroke();
+        if (ax.lbl) {
+          drawText(ax.lbl, tip.x + 12, tip.y - 8, 15, ax.col, 700, "center", alpha * 0.9, true);
+        }
+      });
+    }
+    ctx.restore();
+  }
+
+  function draw3DWireSphere(cx, cy, radius, rx, ry, opts = {}) {
+    const {
+      latRings = 8,
+      lonRings = 14,
+      color = COL.chalk,
+      alpha = 1,
+      lineWidth = 1.5,
+      highlightEquator = false,
+      equatorColor = COL.blue,
+    } = opts;
+    if (alpha <= 0.005) return;
+
+    ctx.save();
+    const g = ctx.createRadialGradient(cx - radius * 0.28, cy - radius * 0.28, radius * 0.08, cx, cy, radius);
+    g.addColorStop(0, `rgba(235,235,235,${0.15 * alpha})`);
+    g.addColorStop(0.7, `rgba(107,140,174,${0.05 * alpha})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, TAU);
+    ctx.fill();
+
+    for (let i = 1; i < latRings; i++) {
+      const phi = (i / latRings - 0.5) * Math.PI;
+      const rLat = Math.cos(phi);
+      const yLat = Math.sin(phi);
+      const isEq = highlightEquator && i === Math.floor(latRings / 2);
+      const steps = 64;
+      for (let j = 0; j < steps; j++) {
+        const th0 = (j / steps) * TAU;
+        const th1 = ((j + 1) / steps) * TAU;
+        const p0 = project3D(rLat * Math.cos(th0), yLat, rLat * Math.sin(th0), cx, cy, radius, rx, ry);
+        const p1 = project3D(rLat * Math.cos(th1), yLat, rLat * Math.sin(th1), cx, cy, radius, rx, ry);
+        const depthAlpha = p0.z < 0 ? 0.88 : 0.22;
+        ctx.strokeStyle = isEq ? equatorColor : color;
+        ctx.lineWidth = isEq ? lineWidth * 2.0 : lineWidth;
+        ctx.globalAlpha = alpha * depthAlpha;
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    }
+
+    for (let i = 0; i < lonRings; i++) {
+      const th = (i / lonRings) * Math.PI;
+      const steps = 64;
+      for (let j = 0; j < steps; j++) {
+        const a0 = (j / steps) * TAU;
+        const a1 = ((j + 1) / steps) * TAU;
+        const p0 = project3D(Math.cos(a0) * Math.cos(th), Math.sin(a0), Math.cos(a0) * Math.sin(th), cx, cy, radius, rx, ry);
+        const p1 = project3D(Math.cos(a1) * Math.cos(th), Math.sin(a1), Math.cos(a1) * Math.sin(th), cx, cy, radius, rx, ry);
+        const depthAlpha = p0.z < 0 ? 0.72 : 0.18;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth * 0.9;
+        ctx.globalAlpha = alpha * depthAlpha;
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    }
+
+    ctx.globalAlpha = alpha * 0.95;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth * 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw a 3D Extruded N-Sided Prism / Cylinder in 3D Mathematical Space!
+  function draw3DExtrudedPolygonPrism(cx, cy, scale, n, rx, ry, opts = {}) {
+    const {
+      height = 1.1,
+      strokeTop = COL.blue,
+      strokeSide = "rgba(107, 140, 174, 0.38)",
+      alpha = 1,
+    } = opts;
+    if (alpha <= 0.005) return;
+    ctx.save();
+    const yTop = -height / 2, yBot = height / 2;
+
+    // Bottom face
+    ctx.globalAlpha = alpha * 0.45;
+    ctx.strokeStyle = strokeSide;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * TAU;
+      const p = project3D(Math.cos(a), yBot, Math.sin(a), cx, cy, scale, rx, ry);
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // Vertical prism edges
+    const stride = n > 24 ? Math.ceil(n / 24) : 1;
+    for (let i = 0; i < n; i += stride) {
+      const a = (i / n) * TAU;
+      const pT = project3D(Math.cos(a), yTop, Math.sin(a), cx, cy, scale, rx, ry);
+      const pB = project3D(Math.cos(a), yBot, Math.sin(a), cx, cy, scale, rx, ry);
+      ctx.globalAlpha = alpha * (pT.z < 0 ? 0.65 : 0.20);
+      ctx.beginPath(); ctx.moveTo(pT.x, pT.y); ctx.lineTo(pB.x, pB.y); ctx.stroke();
+    }
+
+    // Top face (highlighted)
+    ctx.globalAlpha = alpha * 0.95;
+    ctx.strokeStyle = strokeTop;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * TAU;
+      const p = project3D(Math.cos(a), yTop, Math.sin(a), cx, cy, scale, rx, ry);
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* === Pure 2D Typography & Primitives === */
+  function drawText(txt, x, y, size, color = COL.chalk, weight = 700, align = "center", alpha = 1, mono = false, tracking = 0) {
+    if (alpha <= 0.005) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px ${mono ? '"JetBrainsMono", monospace' : '"BeVietnamPro", sans-serif'}`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "middle";
+    if (tracking !== 0 && ctx.letterSpacing !== undefined) {
+      ctx.letterSpacing = `${tracking}px`;
+    }
+    ctx.fillText(txt, x, y);
+    ctx.restore();
+  }
+
+  function drawStrike(x, y, w, h, progress, color = COL.red, cross = false, alpha = 1) {
+    if (progress <= 0 || alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3.2;
+    ctx.lineCap = "round";
+    if (cross) {
+      const p1 = easeOut(clamp(progress * 1.6));
+      const p2 = easeOut(clamp((progress - 0.35) * 1.6));
+      ctx.beginPath();
+      ctx.moveTo(x - w / 2, y - h / 2);
+      ctx.lineTo(lerp(x - w / 2, x + w / 2, p1), lerp(y - h / 2, y + h / 2, p1));
+      ctx.stroke();
+      if (p2 > 0) {
+        ctx.beginPath();
+        ctx.moveTo(x + w / 2, y - h / 2);
+        ctx.lineTo(lerp(x + w / 2, x - w / 2, p2), lerp(y - h / 2, y + h / 2, p2));
+        ctx.stroke();
+      }
+    } else {
+      const p = easeOut(clamp(progress));
+      ctx.beginPath();
+      ctx.moveTo(x - w / 2, y);
+      ctx.lineTo(lerp(x - w / 2, x + w / 2, p), y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Pure 2D Chapter Card (Frameless, clean @median-lab style)
+  function drawChapterCard(t, sc) {
+    const t0 = sc.start;
+    const dur = sc.leadIn || 3.4;
+    const local = t - t0;
+    if (local < 0 || local > dur) return 0;
+    const a = fadeWindow(local, 0.15, dur - 0.15, 0.55);
+    const yOff = lerp(14, 0, easeOut(seg(local, 0.15, 0.85)));
+    if (sc.watermark) {
+      drawText(sc.watermark, 960, 520 + yOff * 0.5, 230, COL.chalk, 800, "center", a * 0.045);
+    }
+    drawText(sc.kicker, 960, 485 + yOff, 16, COL.sec, 600, "center", a, true, 5);
+    drawText(sc.title, 960, 540 + yOff, 46, COL.chalk, 700, "center", a);
+    return a;
+  }
+
+  function drawPortraitNode(x, y, name, dates, place, role, alpha = 1) {
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const r = 44;
+    ctx.fillStyle = "#141414";
+    ctx.strokeStyle = "#3a3a3a";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r - 2, 0, TAU);
+    ctx.clip();
+    const g = ctx.createRadialGradient(x - 8, y - 12, 4, x, y, r);
+    g.addColorStop(0, "#bdbdbd");
+    g.addColorStop(1, "#2a2a2a");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y - 10, 14, 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y + 34, 28, Math.PI, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    drawText(name, x + 64, y - 16, 22, COL.chalk, 700, "left", alpha);
+    drawText(`${dates} · ${place}`, x + 64, y + 8, 15, COL.sec, 500, "left", alpha, true);
+    if (role) {
+      drawText(role, x + 64, y + 30, 15, COL.gold, 600, "left", alpha);
+    }
+    ctx.restore();
+  }
+
+  /* ============================================================================
+   * SCENE 1: s01-hook — Pure 2D Circle/Disk -> 3D Sphere Space -> 2D Unwrapping -> 3D Curved Space
+   * ============================================================================ */
+  function renderS01(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 480, 620, "rgba(255,255,255,0.05)");
+
+    // Phase 1A (L0 - L1): Pure 2D Circle & Disk alongside a 3D Coordinate Sphere Example
+    if (t < L[2].on + 0.4) {
+      const fadeOutA = 1 - easeIn(seg(t, L[2].on - 0.5, L[2].on + 0.3));
+      const pHero = easeOut(seg(t, 0.3, 1.4));
+      drawText("π", 960, lerp(340, 195, ease(seg(t, L[1].on - 0.4, L[1].on + 0.8))), 112, COL.chalk, 700, "center", pHero * fadeOutA);
+
+      const pDigits = easeOut(seg(t, 2.8, 4.2));
+      drawText("3.14159265...", 960, lerp(435, 282, ease(seg(t, L[1].on - 0.4, L[1].on + 0.8))), 32, COL.sec, 500, "center", pDigits * fadeOutA, true);
+
+      if (t >= L[1].on - 0.2) {
+        const p1 = easeOut(seg(t, L[1].on, L[1].on + 1.2)) * fadeOutA;
+        const p2 = easeOut(seg(t, L[1].on + 1.9, L[1].on + 3.1)) * fadeOutA;
+        const p3 = easeOut(seg(t, L[1].on + 3.8, L[1].on + 5.2)) * fadeOutA;
+
+        // 1. Pure 2D Circumference (x = 460, y = 575)
+        if (p1 > 0) {
+          ctx.save();
+          ctx.strokeStyle = COL.chalk;
+          ctx.lineWidth = 2.6;
+          ctx.globalAlpha = p1;
+          ctx.beginPath();
+          ctx.arc(460, 575, 108, -Math.PI / 2, -Math.PI / 2 + TAU * p1);
+          ctx.stroke();
+          ctx.strokeStyle = COL.sec;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(460, 575);
+          ctx.lineTo(568, 575);
+          ctx.stroke();
+          ctx.restore();
+          drawText("r", 514, 556, 18, COL.sec, 500, "center", p1, true);
+          drawText("1D CIRCUMFERENCE (2D PLANE)", 460, 745, 15, COL.sec, 600, "center", p1, true, 2);
+          drawText("C = 2πr", 460, 782, 26, COL.chalk, 700, "center", p1, true);
+        }
+
+        // 2. Pure 2D Disk Area (x = 940, y = 575)
+        if (p2 > 0) {
+          ctx.save();
+          ctx.globalAlpha = p2;
+          const g = ctx.createRadialGradient(940, 575, 5, 940, 575, 108);
+          g.addColorStop(0, "rgba(107, 140, 174, 0.38)");
+          g.addColorStop(1, "rgba(107, 140, 174, 0.10)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.moveTo(940, 575);
+          ctx.arc(940, 575, 108, -Math.PI / 2, -Math.PI / 2 + TAU * p2);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = COL.blue;
+          ctx.lineWidth = 2.4;
+          ctx.stroke();
+          ctx.restore();
+          drawText("2D DISK AREA", 940, 745, 15, COL.sec, 600, "center", p2, true, 2);
+          drawText("A = πr²", 940, 782, 26, COL.blue, 700, "center", p2, true);
+        }
+
+        // 3. 3D Mathematical Space Example: Sphere Volume in 3D (x, y, z) Coordinate Space (x = 1440, y = 575)
+        if (p3 > 0) {
+          draw3DMathSpace(1440, 575, 110, 0.42, t * 0.65, { alpha: p3 * 0.85, floorY: 0.95 });
+          draw3DWireSphere(1440, 575, 108, 0.42, t * 0.65, {
+            latRings: 8,
+            lonRings: 12,
+            color: COL.chalk,
+            alpha: p3,
+            highlightEquator: true,
+            equatorColor: COL.gold,
+          });
+          drawText("3D SPHERE VOLUME", 1440, 745, 15, COL.sec, 600, "center", p3, true, 2);
+          drawText("V = 4/3 πr³", 1440, 782, 26, COL.gold, 700, "center", p3, true);
+        }
+      }
+    }
+
+    // Phase 1B (L2 - L4): Pure 2D Constructive Proof — Unwrapping Circle C over Diameter d
+    if (t >= L[2].on - 0.3 && t < L[5].on + 0.4) {
+      const aB = fadeWindow(t, L[2].on - 0.3, L[5].on + 0.3, 0.55);
+      const unwrapP = ease(seg(t, L[2].on + 0.8, L[2].on + 4.4));
+      const R = 95, D = R * 2, C_len = D * Math.PI;
+      const cx0 = 960 - C_len / 2;
+      const rollX = cx0 + unwrapP * C_len;
+      const wheelY = 390;
+
+      ctx.save();
+      ctx.globalAlpha = aB;
+      ctx.strokeStyle = "rgba(235,235,235,0.28)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(rollX, wheelY, R, 0, TAU); ctx.stroke();
+
+      ctx.strokeStyle = COL.chalk;
+      ctx.lineWidth = 3.0;
+      ctx.beginPath(); ctx.arc(rollX, wheelY, R, Math.PI / 2 + unwrapP * TAU, Math.PI / 2 + TAU); ctx.stroke();
+
+      const lineY = wheelY + R;
+      const curLen = unwrapP * C_len;
+      ctx.strokeStyle = COL.chalk;
+      ctx.lineWidth = 3.2;
+      ctx.beginPath(); ctx.moveTo(cx0, lineY); ctx.lineTo(cx0 + curLen, lineY); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx0, lineY - 8); ctx.lineTo(cx0, lineY + 8);
+      ctx.moveTo(cx0 + curLen, lineY - 8); ctx.lineTo(cx0 + curLen, lineY + 8);
+      ctx.stroke();
+
+      drawText("C  (Circumference = 3.14159... × d)", 960, lineY - 26, 20, COL.chalk, 600, "center", aB * easeOut(unwrapP), true);
+
+      const dY = lineY + 72;
+      const pDiam = easeOut(seg(t, L[2].on + 1.8, L[2].on + 3.4));
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 2.4;
+      ctx.setLineDash([7, 6]);
+      ctx.beginPath(); ctx.moveTo(960 - (D / 2) * pDiam, dY); ctx.lineTo(960 + (D / 2) * pDiam, dY); ctx.stroke();
+      ctx.setLineDash([]);
+      drawText("d  (Diameter = 1)", 960, dY + 28, 20, COL.gold, 600, "center", aB * pDiam, true);
+
+      const pEq = easeOut(seg(t, L[2].on + 3.2, L[2].on + 4.8));
+      drawText("C / d  =  π", 960, 685, 58, COL.chalk, 700, "center", aB * pEq, true);
+
+      if (t >= L[3].on) {
+        const pWhat = easeOut(seg(t, L[3].on + 0.4, L[3].on + 1.5));
+        const pStrike = easeOut(seg(t, L[3].on + 2.4, L[3].on + 3.4));
+        const pMeas = easeOut(seg(t, L[4].on, L[4].on + 1.1));
+        drawText("WHAT PI ACTUALLY IS?", 680, 815, 24, COL.sec, 600, "center", aB * pWhat * lerp(1, 0.35, pStrike), true, 2);
+        drawStrike(680, 815, 310, 26, pStrike, COL.red, false, aB);
+        drawText("→  ONLY HOW TO MEASURE PI", 1210, 815, 26, COL.gold, 700, "center", aB * pMeas, true, 2);
+      }
+      ctx.restore();
+    }
+
+    // Phase 1C (L5): 2D Epistemic Questions on Left + 3D Curved-Space Coordinate Manifold on Right
+    if (t >= L[5].on - 0.2) {
+      const aC = fadeWindow(t, L[5].on - 0.2, sc.end, 0.55);
+      const questions = [
+        { t0: L[5].on + 0.4, num: "01", q: "What is Pi truly at its deepest level?" },
+        { t0: L[5].on + 2.8, num: "02", q: "Why must it equal exactly 3.14159...?" },
+        { t0: L[5].on + 5.2, num: "03", q: "Why does its decimal expansion never end?" },
+        { t0: L[5].on + 7.8, num: "04", q: "Why is C / d ≠ π in curved 3D space?" },
+      ];
+      questions.forEach((item, idx) => {
+        const pq = easeOut(seg(t, item.t0, item.t0 + 1.0)) * aC;
+        const y = 340 + idx * 96;
+        const isLast = idx === 3;
+        drawText(item.num, 240, y, 20, isLast ? COL.gold : COL.blue, 700, "left", pq, true);
+        drawText(item.q, 300, y, 30, isLast ? COL.gold : COL.chalk, 600, "left", pq);
+      });
+
+      const pSph = easeOut(seg(t, L[5].on + 6.2, L[5].on + 8.2)) * aC;
+      if (pSph > 0) {
+        draw3DMathSpace(1460, 500, 165, 0.44, t * 0.55, { alpha: pSph * 0.85, floorY: 1.0 });
+        draw3DWireSphere(1460, 500, 165, 0.44, t * 0.55, {
+          latRings: 8,
+          lonRings: 14,
+          color: COL.sec,
+          alpha: pSph,
+          highlightEquator: true,
+          equatorColor: COL.gold,
+        });
+        drawText("3D CURVED MANIFOLD:  C / d < π", 1460, 745, 20, COL.gold, 700, "center", pSph, true, 2);
+      }
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 2: s02-origin — Pure 2D Refutations -> 3D Ancient Cylindrical & Pyramidal Examples
+   * ============================================================================ */
+  function renderS02(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 500, 620, "rgba(212,180,106,0.045)");
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) return;
+
+    // 2A (L0 - L1): Pure 2D Refutation (Why not 2 or 4?)
+    if (t >= L[0].on - 0.2 && t < L[2].on + 0.2) {
+      const a = fadeWindow(t, L[0].on - 0.2, L[2].on + 0.2, 0.45);
+      drawText("π = 3.14159... ?", 960, 340, 76, COL.chalk, 700, "center", a, true);
+
+      const p2 = easeOut(seg(t, L[1].on + 0.4, L[1].on + 1.2));
+      const p4 = easeOut(seg(t, L[1].on + 1.4, L[1].on + 2.2));
+      const s2 = easeOut(seg(t, L[1].on + 1.8, L[1].on + 2.6));
+      const s4 = easeOut(seg(t, L[1].on + 2.3, L[1].on + 3.0));
+
+      drawText("2", 720, 580, 92, COL.sec, 700, "center", a * p2 * lerp(1, 0.35, s2), true);
+      drawStrike(720, 580, 88, 88, s2, COL.red, true, a);
+
+      drawText("4", 1200, 580, 92, COL.sec, 700, "center", a * p4 * lerp(1, 0.35, s4), true);
+      drawStrike(1200, 580, 88, 88, s4, COL.red, true, a);
+    }
+
+    // 2B (L2 - L4): Pure 2D Comparison (1 + 1 = 2 vs Forced Flat Euclidean Geometry)
+    if (t >= L[2].on - 0.2 && t < L[5].on + 0.2) {
+      const a = fadeWindow(t, L[2].on - 0.2, L[5].on + 0.2, 0.5);
+      const dimLeft = t >= L[3].on ? lerp(1, 0.24, easeOut(seg(t, L[3].on, L[3].on + 0.7))) : 1;
+
+      drawText("1 + 1 = 2", 520, 390, 64, COL.chalk, 700, "center", a * dimLeft, true);
+      const drawStone = (sx, sy, al) => {
+        ctx.save();
+        ctx.globalAlpha = al;
+        const g = ctx.createRadialGradient(sx - 10, sy - 10, 3, sx, sy, 28);
+        g.addColorStop(0, "#f0f0f0");
+        g.addColorStop(1, "#383838");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(sx, sy, 26, 0, TAU); ctx.fill();
+        ctx.restore();
+      };
+      const pStones = easeOut(seg(t, L[2].on + 2.5, L[2].on + 4.2)) * a * dimLeft;
+      if (pStones > 0) {
+        drawStone(370, 520, pStones);
+        drawText("+", 435, 520, 36, COL.sec, 600, "center", pStones, true);
+        drawStone(500, 520, pStones);
+        drawText("=", 570, 520, 36, COL.sec, 600, "center", pStones, true);
+        drawStone(635, 520, pStones);
+        drawStone(700, 520, pStones);
+        drawText("DISCRETE COUNTING", 535, 620, 16, COL.sec, 600, "center", pStones, true, 3);
+      }
+
+      ctx.save();
+      ctx.strokeStyle = "#2c2c2c";
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = a;
+      ctx.beginPath(); ctx.moveTo(960, 260); ctx.lineTo(960, 820); ctx.stroke();
+      ctx.restore();
+
+      if (t >= L[3].on - 0.2) {
+        const pRight = easeOut(seg(t, L[3].on, L[3].on + 1.0)) * a;
+        const pForced = easeOut(seg(t, L[4].on, L[4].on + 1.2));
+        drawText("π = 3.14159265...", 1400, 360, 52, COL.chalk, 700, "center", pRight, true);
+
+        const strikeComm = easeOut(seg(t, L[3].on + 2.2, L[3].on + 3.2));
+        drawText("MATHEMATICAL COMMITTEE VOTE?", 1400, 445, 20, COL.sec, 600, "center", pRight * lerp(1, 0.3, strikeComm), true, 2);
+        drawStrike(1400, 445, 390, 22, strikeComm, COL.red, false, pRight);
+
+        if (pForced > 0) {
+          ctx.save();
+          ctx.globalAlpha = a * pForced;
+          ctx.strokeStyle = "#282828";
+          ctx.lineWidth = 1;
+          for (let gx = 1220; gx <= 1580; gx += 45) {
+            ctx.beginPath(); ctx.moveTo(gx, 510); ctx.lineTo(gx, 750); ctx.stroke();
+          }
+          for (let gy = 510; gy <= 750; gy += 45) {
+            ctx.beginPath(); ctx.moveTo(1220, gy); ctx.lineTo(1580, gy); ctx.stroke();
+          }
+          ctx.strokeStyle = COL.gold;
+          ctx.lineWidth = 2.8;
+          ctx.beginPath(); ctx.arc(1400, 630, 90, 0, TAU * pForced); ctx.stroke();
+          ctx.restore();
+          drawText("FORCED BY FLAT GEOMETRY", 1400, 785, 18, COL.gold, 700, "center", a * pForced, true, 3);
+        }
+      }
+    }
+
+    // 2C (L5 - L7): 2D Fraction Refutation -> Switch into 3D Space for Babylonian Cylinder & Egyptian Pyramid Examples!
+    if (t >= L[5].on - 0.2) {
+      const a = fadeWindow(t, L[5].on - 0.2, sc.end, 0.55);
+      const dimTop = t >= L[6].on ? lerp(1, 0.25, easeOut(seg(t, L[6].on, L[6].on + 0.8))) : 1;
+
+      drawText("a / b", 680, 230, 44, COL.chalk, 700, "center", a * dimTop * 0.65, true);
+      drawText("FRACTION", 680, 285, 15, COL.sec, 600, "center", a * dimTop, true, 3);
+      drawStrike(680, 230, 110, 54, easeOut(seg(t, L[5].on + 1.8, L[5].on + 2.8)), COL.red, true, a * dimTop);
+
+      drawText("0.142857...", 1240, 230, 44, COL.chalk, 700, "center", a * dimTop * 0.65, true);
+      drawText("REPEATING DECIMAL", 1240, 285, 15, COL.sec, 600, "center", a * dimTop, true, 3);
+      drawStrike(1240, 230, 220, 54, easeOut(seg(t, L[5].on + 3.6, L[5].on + 4.6)), COL.red, true, a * dimTop);
+
+      // L6 - L7: 3D Mathematical Space Examples (Babylonian 3D Cylinder Pillar & Egyptian 3D Pyramid on 3D Grids)
+      if (t >= L[6].on - 0.2) {
+        const pAnc = easeOut(seg(t, L[6].on, L[6].on + 1.4)) * a;
+        const ry = t * 0.6;
+
+        // Left 3D Space: Babylonian Cylinder Pillar (25/8 = 3.125)
+        draw3DMathSpace(600, 575, 115, 0.44, ry, { alpha: pAnc * 0.75, floorY: 0.75, showAxes: false });
+        draw3DExtrudedPolygonPrism(600, 575, 110, 32, 0.44, ry, {
+          height: 0.85,
+          strokeTop: COL.blue,
+          strokeSide: "rgba(107, 140, 174, 0.42)",
+          alpha: pAnc,
+        });
+        drawText("BABYLON (~1900 BCE · 3D PILLAR)", 600, 745, 16, COL.sec, 600, "center", pAnc, true, 2);
+        drawText("25 / 8 = 3.125", 600, 782, 28, COL.blue, 700, "center", pAnc, true);
+
+        // Right 3D Space: Egyptian 3D Pyramid & Octagonal Base (256/81 ≈ 3.1605)
+        draw3DMathSpace(1320, 575, 125, 0.40, ry, { alpha: pAnc * 0.75, floorY: 0.65, showAxes: false });
+        ctx.save();
+        ctx.globalAlpha = pAnc;
+        ctx.strokeStyle = COL.gold;
+        ctx.lineWidth = 2.4;
+        const pyrX = 1320, pyrY = 580, pyrS = 128;
+        const apex = project3D(0, -0.95, 0, pyrX, pyrY, pyrS, 0.40, ry);
+        const base = [
+          project3D(-1, 0.60, -1, pyrX, pyrY, pyrS, 0.40, ry),
+          project3D(1, 0.60, -1, pyrX, pyrY, pyrS, 0.40, ry),
+          project3D(1, 0.60, 1, pyrX, pyrY, pyrS, 0.40, ry),
+          project3D(-1, 0.60, 1, pyrX, pyrY, pyrS, 0.40, ry),
+        ];
+        for (let i = 0; i < 4; i++) {
+          const b0 = base[i], b1 = base[(i + 1) % 4];
+          ctx.beginPath(); ctx.moveTo(b0.x, b0.y); ctx.lineTo(b1.x, b1.y); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(apex.x, apex.y); ctx.lineTo(b0.x, b0.y); ctx.stroke();
+        }
+        ctx.restore();
+        drawText("EGYPT (~1650 BCE · 3D PYRAMID)", 1320, 745, 16, COL.sec, 600, "center", pAnc, true, 2);
+        drawText("256 / 81 ≈ 3.1605", 1320, 782, 28, COL.gold, 700, "center", pAnc, true);
+
+        if (t >= L[7].on - 0.1) {
+          const pL7 = easeOut(seg(t, L[7].on, L[7].on + 0.9)) * a;
+          drawText("EMPIRICAL MEASUREMENT ONLY  —  NO THEORETICAL PROOF", 960, 885, 22, COL.chalk, 700, "center", pL7, true, 3);
+        }
+      }
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 3: s03-archimedes — Pure 2D Polygon Exhaustion (L0-L6) -> 3D Extruded Prism-to-Cylinder Limit (L7-L8)!
+   * ============================================================================ */
+  function renderS03(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 520, 640, "rgba(107,140,174,0.06)");
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) return;
+
+    const a = fadeWindow(t, L[0].on - 0.2, sc.end, 0.55);
+
+    // Transition to 3D Mathematical Prism-to-Cylinder Limit Example during L7-L8!
+    const to3D = ease(seg(t, L[7].on - 0.3, L[7].on + 1.2));
+    const cx = lerp(960, 580, to3D);
+    const cy = 515;
+    const R = lerp(215, 180, to3D);
+
+    // Portraits
+    const pPort = easeOut(seg(t, L[0].on, L[0].on + 1.0)) * a;
+    drawPortraitNode(140, 130, "ARCHIMEDES", "287 – 212 BCE", "Syracuse, Greece", "Method of Exhaustion", pPort * (1 - 0.5 * to3D));
+    if (t >= L[6].on - 0.1) {
+      const pZu = easeOut(seg(t, L[6].on, L[6].on + 1.0)) * a;
+      drawPortraitNode(1280, 130, "ZU CHONGZHI", "429 – 500 CE", "Nanjing, China", "12,288-gon · 355/113", pZu * (1 - 0.5 * to3D));
+    }
+
+    // Pure 2D Archimedes Polygon Trap (Center at L0-L6, shifting left at L7-L8)
+    const pCirc = easeOut(seg(t, L[0].on + 0.6, L[0].on + 2.2)) * a;
+    ctx.save();
+    ctx.globalAlpha = pCirc;
+    const cg = ctx.createRadialGradient(cx, cy, 4, cx, cy, R * 0.9);
+    cg.addColorStop(0, "rgba(255,255,255,0.16)");
+    cg.addColorStop(0.5, "rgba(255,255,255,0.03)");
+    cg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+
+    ctx.strokeStyle = COL.chalk;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + TAU * pCirc); ctx.stroke();
+    ctx.restore();
+
+    if (t >= L[1].on && t < L[2].on + 0.3) {
+      const aRul = fadeWindow(t, L[1].on, L[2].on + 0.2, 0.35) * a;
+      ctx.save();
+      ctx.globalAlpha = aRul;
+      ctx.translate(cx + R + 16, cy);
+      ctx.rotate(Math.sin(t * 3) * 0.08);
+      ctx.fillStyle = "#ebebeb";
+      ctx.fillRect(-6, -95, 14, 190);
+      ctx.restore();
+    }
+
+    if (t >= L[2].on - 0.1) {
+      let N = 6;
+      let boundLabel = "3.0000  <  π  <  3.4641";
+      if (t >= L[6].on + 1.5) { N = 192; boundLabel = "3.1415926  <  π  <  3.1415927"; }
+      else if (t >= L[4].on + 6.4) { N = 96; boundLabel = "3.1408  <  π  <  3.1429"; }
+      else if (t >= L[4].on + 4.8) { N = 48; boundLabel = "3.1394  <  π  <  3.1461"; }
+      else if (t >= L[4].on + 3.2) { N = 24; boundLabel = "3.1326  <  π  <  3.1597"; }
+      else if (t >= L[4].on + 1.8) { N = 12; boundLabel = "3.1058  <  π  <  3.2154"; }
+
+      const pIn = easeOut(seg(t, L[2].on + 0.4, L[2].on + 2.0)) * a;
+      const pOut = easeOut(seg(t, L[2].on + 2.8, L[2].on + 4.4)) * a;
+
+      const spokeCount = Math.min(N, 96);
+      ctx.save();
+      ctx.strokeStyle = "rgba(235, 235, 235, 0.16)";
+      ctx.lineWidth = N >= 48 ? 0.7 : 1.1;
+      ctx.globalAlpha = pIn;
+      for (let i = 0; i < spokeCount; i++) {
+        const ang = (i / spokeCount) * TAU - Math.PI / 2;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.cos(ang), cy + R * Math.sin(ang)); ctx.stroke();
+      }
+      ctx.restore();
+
+      if (pIn > 0) {
+        ctx.save();
+        ctx.globalAlpha = pIn;
+        ctx.strokeStyle = COL.blue;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+          const ang = (i / N) * TAU - Math.PI / 2;
+          const px = cx + R * Math.cos(ang), py = cy + R * Math.sin(ang);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (pOut > 0) {
+        const R_out = R / Math.cos(Math.PI / N);
+        ctx.save();
+        ctx.globalAlpha = pOut;
+        ctx.strokeStyle = COL.gold;
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        for (let i = 0; i <= N; i++) {
+          const ang = (i / N) * TAU - Math.PI / 2;
+          const px = cx + R_out * Math.cos(ang), py = cy + R_out * Math.sin(ang);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      const dispN = t >= L[6].on + 1.5 ? "N = 12,288" : `N = ${N}`;
+      drawText(dispN, cx + R + 90, cy - R + 20, 26, COL.chalk, 700, "center", pIn * (1 - to3D), true);
+      drawText("P (inner)  <  C  <  P (outer)", cx, cy + R + 60, 21, COL.sec, 600, "center", pOut, true);
+
+      if (t >= L[4].on) {
+        drawText(boundLabel, cx, cy - R - 52, 34, COL.chalk, 700, "center", a * easeOut(seg(t, L[4].on, L[4].on + 1.0)), true);
+      }
+
+      // L7 - L8: 3D Mathematical Example on the Right — 3D Faceted Prism Morphing into a Smooth 3D Cylinder!
+      if (to3D > 0.01) {
+        const cx3D = 1340, cy3D = 515;
+        const nPrism = Math.round(lerp(6, 48, ease(seg(t, L[7].on + 0.5, L[8].off - 1.0))));
+        draw3DMathSpace(cx3D, cy3D, 155, 0.42, t * 0.65, { alpha: a * to3D * 0.85, floorY: 0.85 });
+        draw3DExtrudedPolygonPrism(cx3D, cy3D, 150, nPrism, 0.42, t * 0.65, {
+          height: 1.05,
+          strokeTop: COL.gold,
+          strokeSide: "rgba(212, 180, 106, 0.42)",
+          alpha: a * to3D,
+        });
+        drawText(`3D PRISM → SMOOTH CYLINDER (N → ∞)`, cx3D, cy3D + 240, 18, COL.gold, 700, "center", a * to3D, true, 2);
+        drawText("π  =  THE LIMIT BETWEEN STRAIGHT AND CURVED", 960, 895, 25, COL.gold, 700, "center", a * to3D, true, 3);
+      }
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 4: s04-rotation — Pure 2D Radian (L0-L5) -> Full 3D Helical Phase-Space (cos t, sin t, t) (L6-L7)!
+   * ============================================================================ */
+  function renderS04(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 510, 650, "rgba(107,140,174,0.055)");
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) return;
+
+    const a = fadeWindow(t, L[0].on - 0.2, sc.end, 0.55);
+
+    // Phase 4A (L0 - L5): Pure 2D Radian Construction
+    if (t < L[6].on + 0.3) {
+      const a4A = fadeWindow(t, L[0].on - 0.2, L[6].on + 0.2, 0.5);
+      const cx = 960, cy = 500, R = 175;
+
+      const pStrike = easeOut(seg(t, L[0].on + 3.2, L[0].on + 4.4));
+      drawText("CIRCLE ?", cx, 215, 28, COL.sec, 700, "center", a4A * lerp(1, 0.32, pStrike), true, 3);
+      drawStrike(cx, 215, 165, 26, pStrike, COL.red, false, a4A);
+
+      if (t >= L[0].on + 3.8) {
+        drawText("ROTATION", cx, 785, 36, COL.chalk, 700, "center", a4A * easeOut(seg(t, L[0].on + 3.8, L[0].on + 4.9)), true, 4);
+      }
+
+      ctx.save();
+      ctx.globalAlpha = a4A;
+      ctx.strokeStyle = "rgba(235,235,235,0.35)";
+      ctx.lineWidth = 2.0;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.stroke();
+
+      if (t >= L[1].on && t < L[3].on + 0.2) {
+        const aDeg = fadeWindow(t, L[1].on, L[3].on + 0.2, 0.4);
+        ctx.save();
+        ctx.globalAlpha = a4A * aDeg;
+        ctx.strokeStyle = COL.sec;
+        for (let d = 0; d < 360; d += 10) {
+          const rad = (d * Math.PI) / 180;
+          const rIn = d % 30 === 0 ? R - 14 : R - 7;
+          ctx.beginPath();
+          ctx.moveTo(cx + rIn * Math.cos(rad), cy + rIn * Math.sin(rad));
+          ctx.lineTo(cx + R * Math.cos(rad), cy + R * Math.sin(rad));
+          ctx.stroke();
+        }
+        ctx.restore();
+        drawText("360°", cx, cy, 56, COL.chalk, 700, "center", a4A * aDeg, true);
+        drawText("Babylonian 360-day calendar convention (Arbitrary)", cx, 845, 20, COL.sec, 500, "center", a4A * aDeg);
+      }
+
+      if (t >= L[3].on - 0.1) {
+        const pRad = easeOut(seg(t, L[3].on, L[3].on + 1.2));
+        let sweepAngle = 1.0 * easeOut(seg(t, L[3].on + 2.2, L[3].on + 4.5));
+        let labelMain = "1 RADIAN  (arc length = r = 1)";
+        if (t >= L[4].on + 2.2) {
+          sweepAngle = lerp(1.0, Math.PI, ease(seg(t, L[4].on + 2.2, L[4].on + 4.0)));
+          labelMain = "HALF TURN  =  π RADIANS";
+        }
+        if (t >= L[4].on + 4.5) {
+          sweepAngle = lerp(Math.PI, TAU, ease(seg(t, L[4].on + 4.5, L[4].on + 6.2)));
+          labelMain = "FULL TURN  =  2π RADIANS";
+        }
+        if (t >= L[5].on) {
+          sweepAngle = Math.PI;
+          labelMain = "π  =  NATURAL UNIT OF HALF A ROTATION";
+        }
+
+        ctx.fillStyle = "rgba(107, 140, 174, 0.16)";
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, 0, -sweepAngle, true); ctx.closePath(); ctx.fill();
+
+        ctx.strokeStyle = COL.blue;
+        ctx.lineWidth = 2.8;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R, cy); ctx.stroke();
+        drawText("r = 1", cx + R / 2, cy + 26, 20, COL.blue, 700, "center", a4A * pRad, true);
+
+        const ex = cx + R * Math.cos(-sweepAngle), ey = cy + R * Math.sin(-sweepAngle);
+        ctx.strokeStyle = COL.chalk;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+
+        ctx.strokeStyle = COL.gold;
+        ctx.lineWidth = 4.0;
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, -sweepAngle, true); ctx.stroke();
+
+        drawText(labelMain, cx, 845, 24, COL.gold, 700, "center", a4A * pRad, true, 2);
+      }
+      ctx.restore();
+    }
+
+    // Phase 4B (L6 - L7): Switch into 3D Mathematical Space — 3D Helix (cos ωt, sin ωt, t) & Shadow Sine Wave!
+    if (t >= L[6].on - 0.2) {
+      const a4B = fadeWindow(t, L[6].on - 0.2, sc.end, 0.55);
+      drawText("3D PHASE SPACE:  ROTATION (cos ωt, sin ωt) UNFOLDED ACROSS TIME (t)", 960, 130, 24, COL.chalk, 700, "center", a4B, true, 2);
+
+      const cx = 960, cy = 445, S = 145;
+      const rx = 0.42, ry = -0.52;
+      const phase = (t - L[6].on) * 2.6;
+
+      // Draw 3D Coordinate Space (x = cos, y = sin, z = time)
+      draw3DMathSpace(cx, cy, S * 1.4, rx, ry, {
+        alpha: a4B * 0.8,
+        gridRadius: 2.2,
+        axisLabels: ["time (t)", "sin(ωt)", "cos(ωt)"],
+        floorY: 1.05,
+      });
+
+      ctx.save();
+      ctx.globalAlpha = a4B;
+
+      // 1. 3D Unit Circle at t = -2.2 (left end of time axis)
+      ctx.strokeStyle = COL.blue;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      for (let j = 0; j <= 64; j++) {
+        const aC = (j / 64) * TAU;
+        const p = project3D(-2.2, -Math.sin(aC), Math.cos(aC), cx, cy, S, rx, ry);
+        if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+
+      // Rotating radius vector on the 3D circle
+      const pCenter = project3D(-2.2, 0, 0, cx, cy, S, rx, ry);
+      const pTip = project3D(-2.2, -Math.sin(phase), Math.cos(phase), cx, cy, S, rx, ry);
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 3.0;
+      ctx.beginPath(); ctx.moveTo(pCenter.x, pCenter.y); ctx.lineTo(pTip.x, pTip.y); ctx.stroke();
+
+      // 2. 3D Corkscrew Helix (t, -sin(phase - ωt), cos(phase - ωt))
+      const steps = 220;
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 3.2;
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const tVal = lerp(-2.2, 2.4, u);
+        const ang = phase - u * 2.5 * TAU;
+        const p = project3D(tVal, -Math.sin(ang), Math.cos(ang), cx, cy, S, rx, ry);
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+
+      // 3. 2D Sine Wave Shadow Projected onto the Back Wall (z = -1.2) and Floor (y = 1.05)!
+      ctx.strokeStyle = COL.chalk;
+      ctx.lineWidth = 2.4;
+      ctx.globalAlpha = a4B * 0.85;
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const tVal = lerp(-2.2, 2.4, u);
+        const ang = phase - u * 2.5 * TAU;
+        const p = project3D(tVal, -Math.sin(ang), -1.25, cx, cy, S, rx, ry);
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+
+      // Cosine wave shadow on the 3D floor (y = 1.05)
+      ctx.strokeStyle = COL.blue;
+      ctx.lineWidth = 2.0;
+      ctx.globalAlpha = a4B * 0.65;
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const tVal = lerp(-2.2, 2.4, u);
+        const ang = phase - u * 2.5 * TAU;
+        const p = project3D(tVal, 1.05, Math.cos(ang), cx, cy, S, rx, ry);
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // L7: Three physical oscillations at bottom with Spotlight Dimming
+      if (t >= L[7].on - 0.1) {
+        const tL7 = t - L[7].on;
+        const items = [
+          { x: 520, title: "PENDULUM", eq: "T = 2π √(L / g)", active: tL7 >= 2.2 && tL7 < 5.0 },
+          { x: 960, title: "SOUND WAVE", eq: "y = A sin(2πft)", active: tL7 >= 5.0 && tL7 < 7.5 },
+          { x: 1400, title: "AC CURRENT", eq: "i = I₀ sin(2πft)", active: tL7 >= 7.5 },
+        ];
+        items.forEach((it) => {
+          const itemAlpha = a4B * (tL7 < 2.2 ? 0.85 : it.active ? 1.0 : 0.26);
+          drawText(it.title, it.x, 825, 20, it.active ? COL.gold : COL.chalk, 700, "center", itemAlpha, true, 3);
+          drawText(it.eq, it.x, 865, 24, it.active ? COL.chalk : COL.sec, 600, "center", itemAlpha, true);
+        });
+      }
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 5: s05-infinite — Pure 2D Number Sets & Timeline -> 3D Infinite Harmonic Spiral Example (L5)
+   * ============================================================================ */
+  function renderS05(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 520, 640, "rgba(255,255,255,0.05)");
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) return;
+
+    const a = fadeWindow(t, L[0].on - 0.2, sc.end, 0.55);
+
+    // 5A (L0 - L1): Pure 2D Rational vs Irrational Decimal Stream
+    if (t < L[2].on + 0.3) {
+      const a5A = fadeWindow(t, L[0].on - 0.2, L[2].on + 0.2, 0.45);
+      drawText("π = 3.1415926535897932384626433832795028841971...", 960, 380, 38, COL.chalk, 700, "center", a5A, true);
+      drawText("INFINITE · NEVER REPEATS", 960, 440, 18, COL.gold, 600, "center", a5A, true, 4);
+
+      if (t >= L[1].on) {
+        const p13 = easeOut(seg(t, L[1].on, L[1].on + 1.2)) * a5A;
+        drawText("1 / 3  =  0.33333333...", 960, 620, 44, COL.blue, 700, "center", p13, true);
+        drawText("RATIONAL RATIO (p / q)  →  SIMPLE REPEATING LOOP", 960, 680, 18, COL.sec, 600, "center", p13, true, 3);
+      }
+    }
+
+    // 5B (L2 - L5): Pure 2D Timeline & Nested Sets on Left + 3D Infinite Series Convergence Spiral on Right
+    if (t >= L[2].on - 0.2) {
+      const a5B = fadeWindow(t, L[2].on - 0.2, sc.end, 0.55);
+      const pT1 = easeOut(seg(t, L[2].on, L[2].on + 1.2)) * a5B;
+      const pT2 = easeOut(seg(t, L[3].on, L[3].on + 1.2)) * a5B;
+
+      ctx.save();
+      ctx.strokeStyle = "#3a3a3a";
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = pT1;
+      ctx.beginPath(); ctx.moveTo(280, 115); ctx.lineTo(1640, 115); ctx.stroke();
+
+      ctx.fillStyle = COL.blue;
+      ctx.beginPath(); ctx.arc(540, 115, 7, 0, TAU); ctx.fill();
+      drawText("1761", 540, 83, 18, COL.blue, 700, "center", pT1, true);
+      drawPortraitNode(360, 190, "JOHANN LAMBERT", "1761 Proof", "Switzerland", "π is IRRATIONAL (π ≠ p/q)", pT1);
+
+      if (pT2 > 0) {
+        ctx.fillStyle = COL.gold;
+        ctx.beginPath(); ctx.arc(1240, 115, 7, 0, TAU); ctx.fill();
+        drawText("1882", 1240, 83, 18, COL.gold, 700, "center", pT2, true);
+        drawPortraitNode(1060, 190, "F. VON LINDEMANN", "1882 Proof", "Germany", "π is TRANSCENDENTAL", pT2);
+      }
+      ctx.restore();
+
+      // Left: Pure 2D Nested Number-System Ellipses
+      const cx = 560, cy = 610;
+      const rings = [
+        { rx: 62, ry: 40, lbl: "ℕ", col: "#484848" },
+        { rx: 115, ry: 74, lbl: "ℤ", col: "#585858" },
+        { rx: 172, ry: 112, lbl: "ℚ (Fractions)", col: COL.blue },
+        { rx: 235, ry: 152, lbl: "Algebraic (√2)", col: "#888888" },
+        { rx: 310, ry: 200, lbl: "ℝ (Transcendental)", col: COL.gold },
+      ];
+      ctx.save();
+      ctx.globalAlpha = a5B;
+      rings.forEach((r, idx) => {
+        ctx.strokeStyle = r.col;
+        ctx.lineWidth = idx >= 2 ? 2.0 : 1.3;
+        ctx.beginPath();
+        ctx.ellipse(cx - (4 - idx) * 22, cy, r.rx, r.ry, 0, 0, TAU);
+        ctx.stroke();
+        drawText(r.lbl, cx - (4 - idx) * 22, cy - r.ry + 22, 15, r.col, 600, "center", a5B, true);
+      });
+      if (pT2 > 0) {
+        drawText("π", cx + 235, cy + 10, 56, COL.gold, 800, "center", pT2);
+        drawText("TRANSCENDENTAL", cx + 235, cy + 54, 14, COL.gold, 700, "center", pT2, true, 2);
+      }
+      ctx.restore();
+
+      // Right (L4): Pure 2D Squaring the Circle Impossible
+      if (t >= L[4].on && t < L[5].on + 0.2) {
+        const aSq = fadeWindow(t, L[4].on, L[5].on + 0.2, 0.4) * a5B;
+        ctx.save();
+        ctx.globalAlpha = aSq;
+        ctx.strokeStyle = COL.blue;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.arc(1380, 555, 82, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = COL.gold;
+        ctx.setLineDash([6, 6]);
+        ctx.strokeRect(1380 - 73, 555 - 73, 146, 146);
+        ctx.setLineDash([]);
+        ctx.restore();
+
+        drawText("SQUARING THE CIRCLE", 1380, 690, 20, COL.chalk, 700, "center", aSq, true, 2);
+        drawText("Compass & Straightedge  →  IMPOSSIBLE", 1380, 725, 17, COL.red, 600, "center", aSq, true);
+        drawStrike(1380, 555, 170, 170, easeOut(seg(t, L[4].on + 4.5, L[4].on + 5.8)), COL.red, true, aSq);
+      }
+
+      // Right (L5): Switch into 3D Space — 3D Infinite Series Convergence Vortex approaching the π Axis!
+      if (t >= L[5].on - 0.1) {
+        const pInf = easeOut(seg(t, L[5].on, L[5].on + 1.2)) * a5B;
+        const sx = 1380, sy = 560, S = 135;
+        draw3DMathSpace(sx, sy, S, 0.42, t * 0.6, { alpha: pInf * 0.75, floorY: 0.9, showAxes: true, axisLabels: ["n → ∞", "Error", ""] });
+
+        // 3D Alternating Series Spiral converging onto the central π axis (y = 0)
+        ctx.save();
+        ctx.globalAlpha = pInf;
+        ctx.strokeStyle = COL.gold;
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        const nSteps = 160;
+        for (let i = 0; i <= nSteps; i++) {
+          const u = i / nSteps;
+          const zVal = lerp(-1.3, 1.3, u);
+          const amp = 0.85 * Math.exp(-u * 2.6);
+          const ang = u * 7.0 * TAU - t * 3.0;
+          const p = project3D(zVal, amp * Math.sin(ang), amp * Math.cos(ang), sx, sy, S, 0.42, t * 0.6);
+          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        drawText("π / 4  =  1 − 1/3 + 1/5 − 1/7 + ...", sx, 360, 24, COL.chalk, 700, "center", pInf, true);
+        drawText("3D INFINITE CONVERGENCE SPIRAL (N → ∞)", sx, 765, 17, COL.gold, 700, "center", pInf, true, 2);
+      }
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 6: s06-curved — Full 3D Non-Euclidean Mathematical Surfaces!
+   * ============================================================================ */
+  function renderS06(t, sc) {
+    const L = sc.lines;
+    drawBackground(t, 960, 520, 680, "rgba(107,140,174,0.06)");
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) return;
+
+    const a = fadeWindow(t, L[0].on - 0.2, sc.end, 0.55);
+
+    const pHead = easeOut(seg(t, L[0].on, L[0].on + 1.2)) * a;
+    const pStrikeRatio = easeOut(seg(t, L[2].on + 4.5, L[2].on + 5.6));
+    drawText("MATHEMATICAL CONSTANT:  π = 3.14159265...", 560, 145, 22, COL.chalk, 700, "center", pHead, true);
+    drawText("PHYSICAL RATIO:  C / d = π", 1380, 145, 24, COL.sec, 700, "center", pHead * lerp(1, 0.4, pStrikeRatio), true);
+    drawStrike(1380, 145, 340, 26, pStrikeRatio, COL.red, false, pHead);
+
+    const ry = t * 0.48;
+
+    // 1. 3D Positively Curved Sphere in 3D Coordinate Space (C / d < π)
+    if (t >= L[2].on - 0.2) {
+      const pSph = easeOut(seg(t, L[2].on, L[2].on + 1.2)) * a;
+      const focusSph = t < L[4].on ? 1.0 : 0.35;
+      const sx = t < L[4].on ? 960 : 410;
+      const sy = 515;
+      const sRad = t < L[4].on ? 205 : 150;
+
+      draw3DMathSpace(sx, sy, sRad, 0.48, ry, { alpha: pSph * focusSph * 0.65, floorY: 1.05, showAxes: false });
+      draw3DWireSphere(sx, sy, sRad, 0.48, ry, {
+        latRings: 8,
+        lonRings: 14,
+        color: COL.sec,
+        alpha: pSph * focusSph,
+      });
+
+      ctx.save();
+      ctx.globalAlpha = pSph * focusSph;
+      const phiCap = -0.35, rCap = Math.cos(phiCap), yCap = Math.sin(phiCap);
+      ctx.strokeStyle = COL.blue;
+      ctx.lineWidth = 3.6;
+      ctx.beginPath();
+      for (let j = 0; j <= 64; j++) {
+        const th = (j / 64) * TAU;
+        const p = project3D(rCap * Math.cos(th), yCap, rCap * Math.sin(th), sx, sy, sRad, 0.48, ry);
+        if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 3.6;
+      ctx.beginPath();
+      for (let j = 0; j <= 48; j++) {
+        const aGeo = lerp(-Math.PI / 2 - (Math.PI / 2 + phiCap), -Math.PI / 2 + (Math.PI / 2 + phiCap), j / 48);
+        const p = project3D(Math.cos(aGeo), Math.sin(aGeo), 0, sx, sy, sRad, 0.48, ry);
+        if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      drawText("3D SPHERE (POSITIVE CURVATURE)", sx, sy + sRad + 55, 17, COL.sec, 600, "center", pSph * focusSph, true, 2);
+      drawText("C / d  <  π", sx, sy + sRad + 92, 32, COL.blue, 700, "center", pSph * focusSph, true);
+    }
+
+    // 2. 3D Hyperbolic Saddle Surface z = (x² - y²) in 3D Coordinate Space (C / d > π)
+    if (t >= L[4].on - 0.2) {
+      const pSad = easeOut(seg(t, L[4].on, L[4].on + 1.2)) * a;
+      const focusSad = t < L[5].on ? 1.0 : 0.35;
+      const hx = t < L[5].on ? 1180 : 960;
+      const hy = 515;
+      const hScale = t < L[5].on ? 175 : 145;
+
+      draw3DMathSpace(hx, hy, hScale, 0.46, ry, { alpha: pSad * focusSad * 0.65, floorY: 1.05, showAxes: false });
+
+      ctx.save();
+      ctx.globalAlpha = pSad * focusSad;
+      ctx.strokeStyle = "#525252";
+      ctx.lineWidth = 1.3;
+      const gridN = 9;
+      for (let i = -gridN; i <= gridN; i += 2) {
+        const u = i / gridN;
+        ctx.beginPath();
+        for (let j = -gridN; j <= gridN; j++) {
+          const v = j / gridN;
+          const p = project3D(u, 0.42 * (u * u - v * v), v, hx, hy, hScale, 0.46, ry);
+          if (j === -gridN) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        for (let j = -gridN; j <= gridN; j++) {
+          const v = j / gridN;
+          const p = project3D(v, 0.42 * (v * v - u * u), u, hx, hy, hScale, 0.46, ry);
+          if (j === -gridN) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      for (let j = 0; j <= 72; j++) {
+        const th = (j / 72) * TAU;
+        const u = 0.78 * Math.cos(th), v = 0.78 * Math.sin(th);
+        const p = project3D(u, 0.42 * (u * u - v * v), v, hx, hy, hScale, 0.46, ry);
+        if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      drawText("3D SADDLE (NEGATIVE CURVATURE)", hx, hy + hScale + 55, 17, COL.sec, 600, "center", pSad * focusSad, true, 2);
+      drawText("C / d  >  π", hx, hy + hScale + 92, 32, COL.gold, 700, "center", pSad * focusSad, true);
+    }
+
+    // 3. 3D Relativistic Gravity Well (Spacetime Funnel)
+    if (t >= L[5].on - 0.2) {
+      const pRel = easeOut(seg(t, L[5].on, L[5].on + 1.2)) * a;
+      const gx = 1510, gy = 485, gScale = 155;
+
+      draw3DMathSpace(gx, gy, gScale, 0.52, ry * 0.7, { alpha: pRel * 0.65, floorY: 1.15, showAxes: false });
+
+      ctx.save();
+      ctx.globalAlpha = pRel;
+      for (let rStep = 0.22; rStep <= 1.05; rStep += 0.16) {
+        const depthY = 0.18 / (rStep + 0.08) - 0.15;
+        ctx.strokeStyle = rStep < 0.55 ? COL.gold : "#585858";
+        ctx.lineWidth = rStep < 0.55 ? 2.4 : 1.3;
+        ctx.beginPath();
+        for (let j = 0; j <= 64; j++) {
+          const th = (j / 64) * TAU;
+          const p = project3D(rStep * Math.cos(th), depthY, rStep * Math.sin(th), gx, gy, gScale, 0.52, ry * 0.7);
+          if (j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "#484848";
+      ctx.lineWidth = 1.1;
+      for (let m = 0; m < 12; m++) {
+        const th = (m / 12) * TAU;
+        ctx.beginPath();
+        for (let rStep = 0.22; rStep <= 1.05; rStep += 0.08) {
+          const depthY = 0.18 / (rStep + 0.08) - 0.15;
+          const p = project3D(rStep * Math.cos(th), depthY, rStep * Math.sin(th), gx, gy, gScale, 0.52, ry * 0.7);
+          if (rStep === 0.22) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      drawText("RELATIVISTIC GRAVITY WELL", gx, 670, 17, COL.sec, 600, "center", pRel, true, 2);
+      drawText("WARPED 3D SPACETIME", gx, 707, 24, COL.chalk, 700, "center", pRel, true);
+      drawText("C = πd  IS THE LAW OF FLAT EUCLIDEAN SPACE", 960, 895, 24, COL.chalk, 700, "center", pRel, true, 3);
+    }
+  }
+
+  /* ============================================================================
+   * SCENE 7: s07-synthesis — Pure 2D 4-Quadrant Spotlight -> 3D Torus + Sphere Finale
+   * ============================================================================ */
+  function renderS07(t, sc) {
+    const L = sc.lines;
+    if (drawChapterCard(t, sc) > 0 && t < L[0].on) {
+      drawBackground(t, 960, 520, 540);
+      drawChapterCard(t, sc);
+      return;
+    }
+
+    let activeIdx = -1;
+    let spotX = 960, spotY = 520;
+    if (t >= L[1].on && t < L[2].on) { activeIdx = 0; spotX = 520; spotY = 330; }
+    else if (t >= L[2].on && t < L[3].on) { activeIdx = 1; spotX = 1400; spotY = 330; }
+    else if (t >= L[3].on && t < L[4].on) { activeIdx = 2; spotX = 520; spotY = 730; }
+    else if (t >= L[4].on && t < L[5].on) { activeIdx = 3; spotX = 1400; spotY = 730; }
+
+    drawBackground(t, spotX, spotY, 560, "rgba(212,180,106,0.085)");
+
+    // Phase 7A: Pure 2D 4-Quadrant Synthesis with Selective Spotlight Dimming (and 3D Sphere in Quadrant 4)
+    if (t < L[5].on + 0.3) {
+      const aGrid = fadeWindow(t, L[0].on - 0.2, L[5].on + 0.2, 0.55);
+
+      ctx.save();
+      ctx.strokeStyle = "#222222";
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = aGrid;
+      ctx.beginPath();
+      ctx.moveTo(960, 120); ctx.lineTo(960, 960);
+      ctx.moveTo(200, 540); ctx.lineTo(1720, 540);
+      ctx.stroke();
+      ctx.restore();
+
+      const qAlpha = (idx, tUnlock) => {
+        if (t < tUnlock) return 0;
+        const enter = easeOut(seg(t, tUnlock, tUnlock + 0.9));
+        const focus = activeIdx === -1 ? 0.85 : activeIdx === idx ? 1.0 : 0.22;
+        return aGrid * enter * focus;
+      };
+
+      const a0 = qAlpha(0, L[1].on);
+      if (a0 > 0) {
+        ctx.save();
+        ctx.globalAlpha = a0;
+        ctx.strokeStyle = COL.chalk;
+        ctx.lineWidth = 2.0;
+        ctx.beginPath(); ctx.arc(520, 285, 76, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = COL.blue;
+        ctx.beginPath();
+        for (let i = 0; i <= 12; i++) {
+          const ang = (i / 12) * TAU;
+          const x = 520 + 76 * Math.cos(ang), y = 285 + 76 * Math.sin(ang);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+        drawText("01 · THE GEOMETRIC LIMIT", 520, 410, 20, COL.blue, 700, "center", a0, true, 2);
+        drawText("Polygons (N → ∞) bridge straight and curved", 520, 448, 20, COL.chalk, 500, "center", a0);
+      }
+
+      const a1 = qAlpha(1, L[2].on);
+      if (a1 > 0) {
+        ctx.save();
+        ctx.globalAlpha = a1;
+        ctx.strokeStyle = COL.gold;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.arc(1270, 285, 62, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = COL.chalk;
+        ctx.beginPath();
+        for (let i = 0; i <= 90; i++) {
+          const u = i / 90;
+          const x = 1360 + u * 210;
+          const y = 285 - 52 * Math.sin(u * TAU * 1.5 - t * 3);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+        drawText("02 · NATURAL UNIT OF ROTATION", 1400, 410, 20, COL.gold, 700, "center", a1, true, 2);
+        drawText("Half turn = π rad · Drives every wave & cycle", 1400, 448, 20, COL.chalk, 500, "center", a1);
+      }
+
+      const a2 = qAlpha(2, L[3].on);
+      if (a2 > 0) {
+        drawText("π ≠ p / q      f(π) ≠ 0", 520, 685, 38, COL.chalk, 700, "center", a2, true);
+        drawText("03 · IRRATIONAL & TRANSCENDENTAL", 520, 795, 20, COL.blue, 700, "center", a2, true, 2);
+        drawText("Lambert (1761) & Lindemann (1882)", 520, 833, 20, COL.chalk, 500, "center", a2);
+      }
+
+      const a3 = qAlpha(3, L[4].on);
+      if (a3 > 0) {
+        draw3DWireSphere(1400, 680, 72, 0.45, t * 0.7, {
+          latRings: 6,
+          lonRings: 10,
+          color: COL.gold,
+          alpha: a3,
+          highlightEquator: true,
+          equatorColor: COL.blue,
+        });
+        drawText("04 · SIGNATURE OF FLAT 3D SPACE", 1400, 795, 20, COL.gold, 700, "center", a3, true, 2);
+        drawText("C = πd holds only when spatial curvature K = 0", 1400, 833, 20, COL.chalk, 500, "center", a3);
+      }
+    }
+
+    // Phase 7B (L5 -> Outro): 3D Mathematical Space Finale (3D Torus + Sphere + Coordinate Grid)
+    if (t >= L[5].on - 0.2) {
+      const aOut = fadeWindow(t, L[5].on - 0.2, window.TIMING.duration - 0.5, 0.85);
+      const rx = 0.52 + Math.sin(t * 0.4) * 0.12;
+      const ry = t * 0.55;
+
+      draw3DMathSpace(960, 430, 165, rx, ry, { alpha: aOut * 0.65, floorY: 1.15, showAxes: false });
+
+      ctx.save();
+      ctx.globalAlpha = aOut * 0.45;
+      ctx.strokeStyle = COL.blue;
+      ctx.lineWidth = 1.2;
+      for (let uStep = 0; uStep < 18; uStep++) {
+        const u = (uStep / 18) * TAU;
+        ctx.beginPath();
+        for (let vStep = 0; vStep <= 36; vStep++) {
+          const v = (vStep / 36) * TAU;
+          const R_maj = 1.35, r_min = 0.32;
+          const tx = (R_maj + r_min * Math.cos(v)) * Math.cos(u);
+          const ty = r_min * Math.sin(v);
+          const tz = (R_maj + r_min * Math.cos(v)) * Math.sin(u);
+          const p = project3D(tx, ty, tz, 960, 430, 145, rx, ry);
+          if (vStep === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      draw3DWireSphere(960, 430, 125, rx, t * 0.65, {
+        latRings: 8,
+        lonRings: 14,
+        color: COL.chalk,
+        alpha: aOut * 0.85,
+        highlightEquator: true,
+        equatorColor: COL.gold,
+      });
+      drawText("π", 960, 430, 96, COL.chalk, 700, "center", aOut);
+      drawText("Wherever Pi appears, something is rotating, oscillating, or hiding circular symmetry.", 960, 745, 25, COL.chalk, 600, "center", aOut);
+      drawText("3.14159265358979323846264338327950288419716939937510...", 960, 795, 18, COL.sec, 500, "center", aOut * 0.75, true);
+    }
+  }
+
+  const RENDERERS = {
+    "s01-hook": renderS01,
+    "s02-origin": renderS02,
+    "s03-archimedes": renderS03,
+    "s04-rotation": renderS04,
+    "s05-infinite": renderS05,
+    "s06-curved": renderS06,
+    "s07-synthesis": renderS07,
+  };
+
+  function paintAt(t) {
+    const scenes = window.TIMING.scenes;
+    for (const sid of Object.keys(scenes)) {
+      const sc = scenes[sid];
+      if (t >= sc.start && t <= sc.end) {
+        RENDERERS[sid](t, sc);
+        return;
+      }
+    }
+    drawBackground(t, 960, 520, 0);
+  }
+
+  window.renderAt = (t, type = "image/jpeg", q = 0.94) => {
+    paintAt(t);
+    return canvas.toDataURL(type, q);
+  };
+
+  window.renderSheet = (times, cols = 4, cellW = 560) => {
+    const cellH = Math.round((cellW * 9) / 16);
+    const rows = Math.ceil(times.length / cols);
+    const sc = document.createElement("canvas");
+    sc.width = cols * cellW;
+    sc.height = rows * cellH;
+    const sctx = sc.getContext("2d");
+    const ms = [];
+    times.forEach((t, i) => {
+      const t0 = performance.now();
+      paintAt(t);
+      ms.push(Math.round(performance.now() - t0));
+      const c = i % cols, r = Math.floor(i / cols);
+      sctx.drawImage(canvas, 0, 0, W, H, c * cellW, r * cellH, cellW, cellH);
+      sctx.fillStyle = "rgba(0,0,0,0.65)";
+      sctx.fillRect(c * cellW + 8, r * cellH + 8, 96, 26);
+      sctx.fillStyle = "#ebebeb";
+      sctx.font = "bold 14px monospace";
+      sctx.fillText(`t = ${t.toFixed(1)}s`, c * cellW + 16, r * cellH + 25);
+    });
+    return { url: sc.toDataURL("image/jpeg", 0.92), ms };
+  };
+
+  const audio = document.getElementById("audio");
+  const playBtn = document.getElementById("play-btn");
+  const scrub = document.getElementById("scrub");
+  const timeLbl = document.getElementById("time-lbl");
+
+  if (!location.search.includes("render")) {
+    const tick = () => {
+      const t = audio.paused ? parseFloat(scrub.value) : audio.currentTime;
+      if (!audio.paused) scrub.value = t;
+      timeLbl.textContent = `${t.toFixed(1)}s / ${window.TIMING.duration.toFixed(1)}s`;
+      paintAt(t);
+      requestAnimationFrame(tick);
+    };
+    playBtn.onclick = () => {
+      if (audio.paused) { audio.play(); playBtn.textContent = "Pause"; }
+      else { audio.pause(); playBtn.textContent = "Play"; }
+    };
+    scrub.oninput = () => {
+      audio.currentTime = parseFloat(scrub.value);
+      paintAt(audio.currentTime);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  document.fonts.ready.then(() => {
+    paintAt(2.0);
+    window.ready = true;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SVG Video Studio — 1920×1080</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@600;800;900&family=JetBrains+Mono:wght@700&family=Shantell+Sans:wght@800&display=swap">
+<style>
+  html, body { margin: 0; background: #070B19; color: #F8FAFC; font: 600 14px Inter, system-ui, sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 14px; display: grid; gap: 10px; }
+  .viewport { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #090D1E; border-radius: 14px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.65); }
+  #out { width: 100%; height: 100%; display: block; }
+  /* Offscreen live SVG stage (serialized each frame onto #out canvas) */
+  #svg-host { position: fixed; left: -9999px; top: -9999px; width: 1920px; height: 1080px; pointer-events: none; overflow: hidden; }
+  .bar { display: flex; gap: 12px; align-items: center; background: #131B38; padding: 10px 16px; border-radius: 12px; }
+  #play { background: #3B82F6; color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; font: 700 14px Inter, system-ui, sans-serif; cursor: pointer; }
+  #scrub { flex: 1; accent-color: #67E8F9; }
+  #tt { font-family: "JetBrains Mono", monospace; font-size: 13px; font-variant-numeric: tabular-nums; min-width: 240px; color: #67E8F9; }
+</style>
+</head>
+<body>
+<main>
+  <div class="viewport">
+    <canvas id="out" width="1920" height="1080"></canvas>
+  </div>
+  <div class="bar">
+    <button id="play">▶ Play</button>
+    <input id="scrub" type="range" min="0" max="60" step="0.0417" value="0">
+    <span id="tt">loading…</span>
+  </div>
+  <audio id="au" preload="auto"></audio>
+</main>
+
+<div id="svg-host" aria-hidden="true">
+  <svg id="stage-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+    <defs id="stage-defs">
+      <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="8" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+      <filter id="glow-strong" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="16" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="6" stdDeviation="4" flood-color="#050814" flood-opacity="0.65"/>
+      </filter>
+      <filter id="boil" x="-10%" y="-10%" width="120%" height="120%">
+        <feTurbulence id="boil-turb" type="turbulence" baseFrequency="0.015" numOctaves="2" seed="1" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="3.2" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </defs>
+    <g id="stage-bg"></g>
+    <g id="stage-root"></g>
+    <g id="stage-fx"></g>
+  </svg>
+</div>
+
+<script src="src/core-svg.js"></script>
+<!-- Register chapters and reusable cast below -->
+<!-- <script src="src/ch/c01_intro.js"></script> -->
+</body>
+</html>
